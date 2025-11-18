@@ -189,18 +189,19 @@ def show_main_app():
     st.markdown("---")
     
     # Menu
-    menu = st.selectbox(
+        menu = st.selectbox(
         "Επιλογή Ενότητας",
         [
             "🏠 Αρχική",
             "📋 Προϊόντα",
             "📍 Θέσεις Αποθήκης",
             "🔄 Συναλλαγές",
-            "📄 Τιμολόγια - Δ.Α.",   # ΝΕΟ
+            "🏭 Προμηθευτές",   # ΝΕΟ
+            "📄 Τιμολόγια - Δ.Α.",
             "📊 Αποθήκη"
         ]
     )
-    
+
     if menu == "🏠 Αρχική":
         show_dashboard(student_db, student_id)
     elif menu == "📋 Προϊόντα":
@@ -325,6 +326,19 @@ def manage_locations(db):
 def manage_transactions(db):
     st.header("🔄 Διαχείριση Συναλλαγών")
     st.info("🚧 Αυτή η ενότητα θα προστεθεί σύντομα...")
+            # Προμηθευτές
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS suppliers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                afm TEXT,
+                address TEXT,
+                phone TEXT,
+                email TEXT,
+                created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
     
     # Εδώ θα προστεθεί κώδικας για συναλλαγές
     st.write("Εισαγωγές, Εξαγωγές, Μεταφορές")
@@ -474,3 +488,4 @@ def show_inventory(db):
 
 if __name__ == "__main__":
     main()
+
