@@ -2,7 +2,7 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import os
-from datetime import datetime
+from datetime import datetime, date   # ΝΕΟ: εισάγουμε και date
 
 # Ρύθμιση σελίδας
 st.set_page_config(
@@ -89,6 +89,32 @@ class StudentWMS:
                 transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+
+        # ΝΕΟ: Πίνακας παραστατικών (Τιμολόγιο - Δελτίο Αποστολής)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS invoices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                doc_number TEXT,
+                doc_type TEXT,
+                doc_date TEXT,
+                customer_name TEXT,
+                afm TEXT,
+                address TEXT,
+                created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # ΝΕΟ: Γραμμές παραστατικών
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS invoice_lines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                invoice_id INTEGER,
+                product_id INTEGER,
+                quantity INTEGER,
+                FOREIGN KEY(invoice_id) REFERENCES invoices(id),
+                FOREIGN KEY(product_id) REFERENCES products(id)
+            )
+        ''')
         
         conn.commit()
         conn.close()
@@ -165,7 +191,14 @@ def show_main_app():
     # Menu
     menu = st.selectbox(
         "Επιλογή Ενότητας",
-        ["🏠 Αρχική", "📋 Προϊόντα", "📍 Θέσεις Αποθήκης", "🔄 Συναλλαγές", "📊 Αποθήκη"]
+        [
+            "🏠 Αρχική",
+            "📋 Προϊόντα",
+            "📍 Θέσεις Αποθήκης",
+            "🔄 Συναλλαγές",
+            "📄 Τιμολόγια - Δ.Α.",   # ΝΕΟ
+            "📊 Αποθήκη"
+        ]
     )
     
     if menu == "🏠 Αρχική":
@@ -176,6 +209,8 @@ def show_main_app():
         manage_locations(student_db)
     elif menu == "🔄 Συναλλαγές":
         manage_transactions(student_db)
+    elif menu == "📄 Τιμολόγια - Δ.Α.":     # ΝΕΟ
+        manage_invoices(student_db)
     elif menu == "📊 Αποθήκη":
         show_inventory(student_db)
 
@@ -293,6 +328,128 @@ def manage_transactions(db):
     
     # Εδώ θα προστεθεί κώδικας για συναλλαγές
     st.write("Εισαγωγές, Εξαγωγές, Μεταφορές")
+
+# ΝΕΟ: Διαχείριση Τιμολογίων - Δελτίων Αποστολής
+def manage_invoices(db):
+    st.header("📄 Τιμολόγια - Δελτία Αποστολής")
+    
+    tab1, tab2 = st.tabs(["➕ Δημιουργία Παραστατικού", "📋 Λίστα Παραστατικών"])
+    
+    # --- Δημιουργία νέου παραστατικού ---
+    with tab1:
+        with st.form("create_invoice"):
+            col1, col2 = st.columns(2)
+            with col1:
+                doc_number = st.text_input("Αριθμός Παραστατικού*")
+                doc_date = st.date_input("Ημερομηνία", value=date.today())
+            with col2:
+                doc_type = st.selectbox("Είδος Παραστατικού", ["Τιμολόγιο - Δελτίο Αποστολής"])
+            
+            st.subheader("Στοιχεία Πελάτη")
+            customer_name = st.text_input("Επωνυμία Πελάτη*")
+            afm = st.text_input("Α.Φ.Μ.")
+            address = st.text_input("Διεύθυνση")
+            
+            st.markdown("---")
+            st.subheader("Γραμμές Παραστατικού (Προϊόντα)")
+            
+            products = pd.read_sql("SELECT id, name, quantity FROM products WHERE quantity > 0", db)
+            qty_inputs = {}
+
+            if products.empty:
+                st.info("Δεν υπάρχουν διαθέσιμα προϊόντα με απόθεμα. Πρόσθεσε προϊόντα ή αύξησε τα αποθέματα.")
+            else:
+                for _, row in products.iterrows():
+                    max_qty = int(row['quantity']) if row['quantity'] is not None else 0
+                    qty = st.number_input(
+                        f"{row['name']} (διαθέσιμα: {max_qty})",
+                        min_value=0,
+                        max_value=max_qty,
+                        value=0,
+                        key=f"inv_qty_{row['id']}"
+                    )
+                    if qty > 0:
+                        qty_inputs[row['id']] = qty
+            
+            submitted = st.form_submit_button("💾 Αποθήκευση Παραστατικού")
+            
+            if submitted:
+                if not doc_number or not customer_name:
+                    st.error("❌ Συμπλήρωσε τουλάχιστον **αριθμό παραστατικού** και **επωνυμία πελάτη**.")
+                elif not qty_inputs:
+                    st.error("❌ Επέλεξε τουλάχιστον **ένα προϊόν** με ποσότητα > 0.")
+                else:
+                    try:
+                        cursor = db.cursor()
+                        # Εισαγωγή header παραστατικού
+                        cursor.execute(
+                            """
+                            INSERT INTO invoices (doc_number, doc_type, doc_date, customer_name, afm, address)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                            """,
+                            (doc_number, doc_type, doc_date.isoformat(), customer_name, afm, address)
+                        )
+                        invoice_id = cursor.lastrowid
+                        
+                        # Εισαγωγή γραμμών & ενημέρωση αποθήκης
+                        for pid, q in qty_inputs.items():
+                            cursor.execute(
+                                "INSERT INTO invoice_lines (invoice_id, product_id, quantity) VALUES (?, ?, ?)",
+                                (invoice_id, pid, q)
+                            )
+                            cursor.execute(
+                                "UPDATE products SET quantity = quantity - ? WHERE id = ?",
+                                (q, pid)
+                            )
+                        
+                        db.commit()
+                        st.success("✅ Το παραστατικό αποθηκεύτηκε επιτυχώς και τα αποθέματα ενημερώθηκαν!")
+                    except Exception as e:
+                        db.rollback()
+                        st.error(f"Σφάλμα κατά την αποθήκευση παραστατικού: {e}")
+    
+    # --- Λίστα παραστατικών ---
+    with tab2:
+        invoices = pd.read_sql(
+            "SELECT id, doc_number, doc_type, doc_date, customer_name FROM invoices ORDER BY doc_date DESC, id DESC",
+            db
+        )
+        
+        if invoices.empty:
+            st.info("Δεν υπάρχουν παραστατικά ακόμη.")
+        else:
+            st.subheader("Όλα τα Παραστατικά")
+            st.dataframe(invoices)
+            
+            st.markdown("---")
+            st.subheader("Προβολή Αναλυτικού Παραστατικού")
+            doc_numbers = invoices['doc_number'].tolist()
+            selected_doc = st.selectbox("Επίλεξε παραστατικό", doc_numbers)
+            
+            if selected_doc:
+                inv_row = invoices[invoices['doc_number'] == selected_doc].iloc[0]
+                
+                st.write(f"**Αρ. Παραστατικού:** {inv_row['doc_number']}")
+                st.write(f"**Είδος:** {inv_row['doc_type']}")
+                st.write(f"**Ημερομηνία:** {inv_row['doc_date']}")
+                st.write(f"**Πελάτης:** {inv_row['customer_name']}")
+                
+                # Γραμμές παραστατικού
+                lines = pd.read_sql(
+                    """
+                    SELECT p.name AS Προϊόν, il.quantity AS Ποσότητα
+                    FROM invoice_lines il
+                    JOIN products p ON p.id = il.product_id
+                    WHERE il.invoice_id = ?
+                    """,
+                    db,
+                    params=(int(inv_row['id']),)
+                )
+                
+                if not lines.empty:
+                    st.table(lines)
+                else:
+                    st.info("Δεν βρέθηκαν γραμμές για το συγκεκριμένο παραστατικό.")
 
 def show_inventory(db):
     st.header("📊 Κατάσταση Αποθήκης")
